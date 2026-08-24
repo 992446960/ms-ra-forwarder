@@ -61,6 +61,35 @@ function buildSSML(text: string, voiceName: string, speed: string) {
     return `<speak xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xmlns:emo="http://www.w3.org/2009/10/emotionml" version="1.0" xml:lang="zh-CN"><voice name="${voiceName}"><prosody rate="${speed}%">${escapeXml(text)}</prosody></voice></speak>`
 }
 
+function buildSSMLFromParams(request: Request, text?: string) {
+    const { searchParams } = new URL(request.url)
+    const voiceName = searchParams.get("voiceName") || "zh-CN-XiaoxiaoNeural"
+    const speed = searchParams.get("speed") || "0"
+    return buildSSML(text || searchParams.get("text") || "你好", voiceName, speed)
+}
+
+function normalizeBodyToSSML(body: string, request: Request) {
+    const content = body.trim()
+    if (!content) {
+        return buildSSMLFromParams(request)
+    }
+
+    if (content.startsWith("<")) {
+        return body
+    }
+
+    try {
+        const data = JSON.parse(content)
+        if (typeof data?.text === "string") {
+            return buildSSMLFromParams(request, data.text)
+        }
+    } catch {
+        // Treat non-JSON request bodies as plain text for simple validation clients.
+    }
+
+    return buildSSMLFromParams(request, content)
+}
+
 export async function POST(request: Request) {
     try {
         const unauthorized = unauthorizedIfNeeded(request)
@@ -68,13 +97,7 @@ export async function POST(request: Request) {
             return unauthorized
         }
 
-        const ssml = await request.text()
-        if (!ssml) {
-            return new Response(JSON.stringify({ error: "SSML body is required" }), {
-                status: 400,
-                headers: { "Content-Type": "application/json" },
-            })
-        }
+        const ssml = normalizeBodyToSSML(await request.text(), request)
 
         return await convertSSML(ssml, getFormat(request))
     } catch (error) {
@@ -94,12 +117,7 @@ export async function GET(request: Request) {
             return unauthorized
         }
 
-        const { searchParams } = new URL(request.url)
-        const text = searchParams.get("text") || "你好"
-        const voiceName = searchParams.get("voiceName") || "zh-CN-XiaoxiaoNeural"
-        const speed = searchParams.get("speed") || "0"
-
-        return await convertSSML(buildSSML(text, voiceName, speed), getFormat(request))
+        return await convertSSML(buildSSMLFromParams(request), getFormat(request))
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         console.error("ra get error", error)
