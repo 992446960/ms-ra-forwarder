@@ -7,6 +7,21 @@ export const CHROMIUM_FULL_VERSION = '144.0.3719.82'
 export const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4'
 const WINDOWS_FILE_TIME_EPOCH = 11644473600n
 
+const TTS_ENDPOINTS = [
+    {
+        host: 'api.msedgeservices.com',
+        voicesUrl: `https://api.msedgeservices.com/tts/cognitiveservices/voices/list?Ocp-Apim-Subscription-Key=${TRUSTED_CLIENT_TOKEN}`,
+        wsBaseUrl: 'wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1',
+        tokenParamName: 'Ocp-Apim-Subscription-Key',
+    },
+    {
+        host: 'speech.platform.bing.com',
+        voicesUrl: `https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}`,
+        wsBaseUrl: 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1',
+        tokenParamName: 'TrustedClientToken',
+    },
+]
+
 class MessageHeader {
     requestId: string
     contentType?: string
@@ -78,10 +93,16 @@ export class EdgeTTSClient {
     private constructor() {
     }
     public static async voices(): Promise<any> {
-        const url = 'https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=6A5AA1D4EAFF4E9FB37E23D68491D6F4'
-        const response = await axios.get(url)
-        const data = response.data
-        return data
+        let lastError: unknown
+        for (const endpoint of TTS_ENDPOINTS) {
+            try {
+                const response = await axios.get(endpoint.voicesUrl)
+                return response.data
+            } catch (error) {
+                lastError = error
+            }
+        }
+        throw lastError
     }
 
     private static generateSecMsGecToken() {
@@ -106,28 +127,36 @@ export class EdgeTTSClient {
         return randomString;
     }
     private static async createWS(): Promise<WebSocket> {
-        const connectionId = this.generateId()
-        const secMsGec = this.generateSecMsGecToken()
-        let url = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=1-${CHROMIUM_FULL_VERSION}&ConnectionId=${connectionId}`
-        const client = new WebSocket(url, {
-            host: 'speech.platform.bing.com',
-            origin: 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
-            headers: {
-                'User-Agent':
-                    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
-            },
-        })
-        return new Promise((resolve, reject) => {
-            client.onopen = () => {
-                console.debug('WebSocket connected')
-                resolve(client)
-            }
+        let lastError: unknown
+        for (const endpoint of TTS_ENDPOINTS) {
+            try {
+                const connectionId = this.generateId()
+                const secMsGec = this.generateSecMsGecToken()
+                const url = `${endpoint.wsBaseUrl}?${endpoint.tokenParamName}=${TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=1-${CHROMIUM_FULL_VERSION}&ConnectionId=${connectionId}`
+                const client = new WebSocket(url, {
+                    host: endpoint.host,
+                    origin: 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
+                    headers: {
+                        'User-Agent':
+                            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
+                    },
+                })
+                return await new Promise<WebSocket>((resolve, reject) => {
+                    client.onopen = () => {
+                        console.debug('WebSocket connected')
+                        resolve(client)
+                    }
 
-            client.onerror = (error) => {
-                console.error('WebSocket error:', error)
-                reject(error)
+                    client.onerror = (error) => {
+                        console.error('WebSocket error:', error)
+                        reject(error)
+                    }
+                })
+            } catch (error) {
+                lastError = error
             }
-        })
+        }
+        throw lastError
     }
 
     public static async convert(ssml: string, options: ClientOptions): Promise<ConvertResult> {
@@ -251,3 +280,4 @@ export class EdgeTTSClient {
         return await result
     }
 }
+
